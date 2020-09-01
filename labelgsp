@@ -1,0 +1,200 @@
+#! /usr/bin/python3
+
+import sys, glob, os, re
+import argparse
+import math
+from PIL import Image
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QBrush, QImage, QPen, QCursor
+from PyQt5.QtCore import pyqtSlot, QPoint, QRect, Qt, QTimer
+
+class App(QWidget):
+
+    def __init__(self, dir):
+        super().__init__()
+
+        self.dir = dir
+        self.image_idx = 0
+        self.image_list = sorted(glob.glob(os.path.join(dir, "*.png")))
+        assert self.image_list, "ディレクトリ内に画像がありません"
+        self.image = QPixmap(self.image_list[self.image_idx]).scaledToWidth(1300)
+        self.image_left = 400
+        self.image_top = 100
+        self.image_mag = Image.open(self.image_list[self.image_idx]).width / 1300
+        self.mode = None
+        self.bb_list = []
+        self.bb_points = []
+        self.save = True
+        self.load_txt()
+
+        self.pos = None
+        self.title = 'labelgsp'
+        self.left = 10
+        self.top = 10
+        self.width = 1800
+        self.height = 1000
+        self.initUI()
+        self.show()
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(10)
+
+    def initUI(self):
+        self.setWindowTitle(self.title)
+        self.setGeometry(self.left, self.top, self.width, self.height)
+
+        create_button = QPushButton('Create Rectangle', self)
+        create_button.move(50,70)
+        create_button.clicked.connect(self.create_on_click)
+
+        remove_button = QPushButton('Remove Rectangle', self)
+        remove_button.move(50,120)
+        remove_button.clicked.connect(self.remove_on_click)
+
+        next_button = QPushButton('Next Image', self)
+        next_button.move(50,170)
+        next_button.clicked.connect(self.next_on_click)
+
+        prev_button = QPushButton('Previous Image', self)
+        prev_button.move(50,220)
+        prev_button.clicked.connect(self.prev_on_click)
+
+        save_button = QPushButton('Save Image', self)
+        save_button.move(50,270)
+        save_button.clicked.connect(self.save_on_click)
+
+    def paintEvent(self, event):
+
+        self.pos = self.mapFromGlobal(QCursor.pos())
+
+        painter = QPainter(self)
+        painter.drawPixmap(self.image_left, self.image_top, self.image)
+
+        for bb in self.bb_list:
+            self.draw_bb(bb[0], bb[1], bb[2], bb[3], Qt.blue, Qt.red)
+
+        if self.mode == "Create":
+            if len(self.bb_points) == 1:
+                self.draw_line(self.bb_points[0], self.pos, Qt.blue)
+
+            elif len(self.bb_points) == 2:
+                self.draw_bb(self.bb_points[0], self.bb_points[1], self.pos, self.pos + (self.bb_points[0] - self.bb_points[1]), Qt.blue, Qt.red)
+
+        if self.mode == "Remove":
+            for bb in self.bb_list:
+                if math.sqrt((self.pos.x() - (bb[0].x() + bb[2].x()) / 2)**2 + (self.pos.y() - (bb[0].y() + bb[2].y()) / 2)**2) < 50:
+                    self.draw_bb(bb[0], bb[1], bb[2], bb[3], Qt.yellow, Qt.yellow)
+                    break
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+                if self.mode == "Create":
+                    self.bb_points.append(self.pos)
+                    if len(self.bb_points) == 3:
+                        self.bb_points.append(self.bb_points[2] + (self.bb_points[0] - self.bb_points[1]))
+                        self.bb_list.append(self.bb_points.copy())
+                        self.bb_points.clear()
+                        self.save = False
+
+                elif self.mode == "Remove":
+                    for bb in self.bb_list:
+                        if math.sqrt((self.pos.x() - (bb[0].x() + bb[2].x()) / 2)**2 + (self.pos.y() - (bb[0].y() + bb[2].y()) / 2)**2) < 50:
+                            self.bb_list.remove(bb)
+                            self.save = False
+                            break
+
+
+    def create_on_click(self):
+        self.mode = "Create"
+
+    def remove_on_click(self):
+        self.mode = "Remove"
+
+    def next_on_click(self):
+        if not self.save:
+            print("exit without saving")
+            #TODO:警告ウィンドウを作る
+        if not self.image_idx == len(self.image_list) - 1:
+            self.image_idx += 1
+        self.image = QPixmap(self.image_list[self.image_idx]).scaledToWidth(1300)
+        self.bb_list.clear()
+        self.mode = None
+        self.load_txt()
+        self.save = True
+
+    def prev_on_click(self):
+        if not self.save:
+            print("exit without saving")
+            #TODO:警告ウィンドウを作る
+        if not self.image_idx == 0:
+            self.image_idx -= 1
+        self.image = QPixmap(self.image_list[self.image_idx]).scaledToWidth(1300)
+        self.bb_list.clear()
+        self.mode = None
+        self.load_txt()
+        self.save = True
+
+    def save_on_click(self):
+        filename, _ = os.path.splitext(os.path.basename(self.image_list[self.image_idx]))
+        txt_file = "pcd" + re.sub("\\D", "", filename) + "cpos.txt"
+        with open(os.path.join(self.dir, txt_file), "w") as f:
+            for bb in self.bb_list:
+                bb_img = self.WidgetToImage(bb)
+                for i in range(4):
+                    f.write(str(bb_img[i].x()) + " " + str(bb_img[i].y()) + "\n")
+        self.save = True
+
+    def draw_line(self, p1, p2, color):
+        qp = QPainter(self)
+        qp.setPen(QPen(color, 2, Qt.SolidLine))
+        qp.drawLine(p1, p2)
+        self.update()
+
+    def draw_bb(self, p1, p2, p3, p4, color1, color2):
+        qp = QPainter(self)
+        qp.setPen(QPen(color1, 2, Qt.SolidLine))
+        qp.drawLine(p1, p2)
+        qp.drawLine(p3, p4)
+        qp.setPen(QPen(color2, 2, Qt.SolidLine))
+        qp.drawLine(p2, p3)
+        qp.drawLine(p1, p4)
+        self.update()
+
+    def load_txt(self):
+        filename, _ = os.path.splitext(os.path.basename(self.image_list[self.image_idx]))
+        txt_file = "*" + re.sub("\\D", "", filename) + "*.txt"
+        txt_path = sorted(glob.glob(os.path.join(self.dir, txt_file)))
+        if not txt_path:
+            return
+        self.bb_points.clear()
+        with open(txt_path[0]) as f:
+            for line in f:
+                self.bb_points.append(QPoint(round(float(line.split()[0])), round(float(line.split()[1]))))
+                if len(self.bb_points) == 4:
+                    self.bb_list.append(self.ImageToWidget(self.bb_points.copy()))
+                    self.bb_points.clear()
+
+    def WidgetToImage(self, bb):
+        return [QPoint((bb[1].x() - self.image_left) * self.image_mag, (bb[1].y() - self.image_top) * self.image_mag),
+                QPoint((bb[2].x() - self.image_left) * self.image_mag, (bb[2].y() - self.image_top) * self.image_mag),
+                QPoint((bb[3].x() - self.image_left) * self.image_mag, (bb[3].y() - self.image_top) * self.image_mag),
+                QPoint((bb[0].x() - self.image_left) * self.image_mag, (bb[0].y() - self.image_top) * self.image_mag)]
+
+    def ImageToWidget(self, bb):
+        return [QPoint(bb[3].x() / self.image_mag + self.image_left, bb[3].y() / self.image_mag + self.image_top),
+                QPoint(bb[0].x() / self.image_mag + self.image_left, bb[0].y() / self.image_mag + self.image_top),
+                QPoint(bb[1].x() / self.image_mag + self.image_left, bb[1].y() / self.image_mag + self.image_top),
+                QPoint(bb[2].x() / self.image_mag + self.image_left, bb[2].y() / self.image_mag + self.image_top)]
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('img_dir', type=str, help='directory to which images belong')
+    args = parser.parse_args()
+
+    img_dir = args.img_dir
+    app = QApplication(sys.argv)
+    window = App(img_dir)
+    window.show()
+    sys.exit(app.exec_())
